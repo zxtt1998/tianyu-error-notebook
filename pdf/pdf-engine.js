@@ -6,6 +6,25 @@ function encode(value){const bytes=new TextEncoder().encode(JSON.stringify(value
 function pageCode(id,page){let h=2166136261;for(const c of id+':'+page){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return (h>>>0).toString(2).padStart(32,'0')}
 function decode(value){return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(value),c=>c.charCodeAt(0))))}
 // The document uses vector text and lines. Raster assets retain their original pixels.
+const toolsLoading=new Map();
+async function localTool(src,name){if(window[name])return window[name];if(!toolsLoading.has(src))toolsLoading.set(src,new Promise((resolve,reject)=>{const s=document.createElement('script');s.src='vendor/'+src;s.onload=()=>window[name]?resolve(window[name]):reject(Error('PDF定位工具不完整，请更新离线下载。'));s.onerror=()=>{s.remove();reject(Error('PDF定位工具加载失败，请联网重试或更新离线下载。'))};document.head.append(s)}).catch(e=>{toolsLoading.delete(src);throw e}));return toolsLoading.get(src)}
+function recoveryPayload(m,item,q){const raw=new Uint8Array(30);raw.set([3,m.subject==='technical'?1:2,Number(q.paper),Number(q.number),item.page>>8,item.page&255,m.totalPages>>8,m.totalPages&255,m.items.length>>8,m.items.length&255]);raw.set(m.id.replace(/-/g,'').match(/../g).map(v=>parseInt(v,16)),10);const code=parseInt(item.code,2)>>>0;raw.set([code>>>24,(code>>>16)&255,(code>>>8)&255,code&255],26);return 'TY2:'+btoa(String.fromCharCode(...raw))}
+function parseRecovery(value){if(!/^TY2:[A-Za-z0-9+/]+=*$/.test(value))return null;let b;try{b=Uint8Array.from(atob(value.slice(4)),c=>c.charCodeAt(0))}catch{return null}if(!((b.length===26&&b[0]===2)||(b.length===30&&b[0]===3))||![1,2].includes(b[1]))return null;const hex=[...b.slice(10,26)].map(n=>n.toString(16).padStart(2,'0')).join(''),id=hex.slice(0,8)+'-'+hex.slice(8,12)+'-'+hex.slice(12,16)+'-'+hex.slice(16,20)+'-'+hex.slice(20);return {code:b.length===30?(((b[26]<<24)|(b[27]<<16)|(b[28]<<8)|b[29])>>>0).toString(2).padStart(32,'0'):undefined,subject:b[1]===1?'technical':'practical',paper:b[2],number:b[3],page:(b[4]<<8)|b[5],totalPages:(b[6]<<8)|b[7],totalChoices:(b[8]<<8)|b[9],id}}
+function addRecoveryMarks(doc,m,questions){const byId=new Map(questions.map(q=>[q.id,q]));for(const item of m.items){const qr=window.qrcode(0,'M');qr.addData(recoveryPayload(m,item,byId.get(item.id)),'Byte');qr.make();const n=qr.getModuleCount(),cell=Math.min(1.1,37/(n+4)),page=doc.getPage(item.page),top=4,x=508;page.drawRectangle({x,y:PH-top-(n+4)*cell,width:(n+4)*cell,height:(n+4)*cell,color:PDFLib.rgb(1,1,1)});for(let row=0;row<n;row++)for(let col=0;col<n;col++)if(qr.isDark(row,col))page.drawRectangle({x:x+(col+2)*cell,y:PH-top-(row+3)*cell,width:cell,height:cell,color:PDFLib.rgb(0,0,0)})}}
+async function recoverManifest(bytes,{bankFor,onProgress=()=>{}}={}){
+ const decoder=await localTool('jsQR.js','jsQR'),info=await readManifest(bytes),pdfjs=await import('./vendor/pdf.min.mjs');pdfjs.GlobalWorkerOptions.workerSrc=new URL('./vendor/pdf.worker.min.mjs',location.href).href;
+ const pdf=await pdfjs.getDocument({data:bytes.slice(),useWasm:false,isEvalSupported:false}).promise;let identity,bank;const items=[],seen=new Set();
+ try{for(let index=0;index<pdf.numPages;index++){
+  const page=await pdf.getPage(index+1),viewport=page.getViewport({scale:SCALE,rotation:0});if(Math.abs(viewport.width/SCALE-PW)>2||Math.abs(viewport.height/SCALE-PH)>2)throw Error('PDF页面尺寸已改变，请保留导出页面尺寸。');
+  const canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);const ctx=canvas.getContext('2d',{willReadFrequently:true});await page.render({canvasContext:ctx,viewport,annotationMode:pdfjs.AnnotationMode.ENABLE}).promise;const crop=ctx.getImageData(478*SCALE,0,80*SCALE,61*SCALE),code=decoder(crop.data,crop.width,crop.height,{inversionAttempts:'dontInvert'}),mark=code&&parseRecovery(code.data);canvas.width=1;canvas.height=1;page.cleanup();
+  if(mark){if(mark.page!==index||mark.totalPages!==info.pages)throw Error('PDF页数或顺序已改变，不能可靠定位题目。');if(!identity){identity=mark;bank=await bankFor(mark.subject)}else if(mark.id!==identity.id||mark.subject!==identity.subject||mark.totalChoices!==identity.totalChoices)throw Error('PDF中混入了不同练习的页面，请使用同一次导出的文件。');const q=bank.questions.find(q=>Number(q.paper)===mark.paper&&Number(q.number)===mark.number);if(!q||q.type==='short'||seen.has(q.id))throw Error('页面题号重复或与当前题库不匹配。');seen.add(q.id);const boxes={};Object.keys(q.options).forEach((letter,i)=>boxes[letter]=[88+i*91,647,27]);items.push({id:q.id,page:index,boxes,code:mark.code||pageCode(mark.id,index)})}
+  onProgress(index+1,pdf.numPages,'恢复页面定位');await pause();
+ }}finally{await pdf.destroy()}
+ if(!identity)throw Error('这份PDF没有可读取的定位信息。旧版PDF请同时选择当时的原始文件；没有原文件时，需要恢复定位后再导入。');
+ if(items.length!==identity.totalChoices)throw Error('部分题目的定位二维码无法读取，请勿遮盖右上角标记；也可同时选择原始PDF。');
+ return {version:1,id:identity.id,subject:identity.subject,width:PW,height:PH,totalPages:info.pages,questionIds:items.map(i=>i.id),items,recoveredFrom:'page-qr'};
+}
+
 let fontPromise;
 async function fontData(){
  if(!fontPromise)fontPromise=(async()=>{
@@ -16,7 +35,7 @@ async function fontData(){
 }
 async function makePdf({questions,subject,solutions=false,onProgress=()=>{}}){
  onProgress(0,questions.length,'准备清晰文字');
- const bytes=await fontData(),doc=await PDFLib.PDFDocument.create();doc.registerFontkit(window.fontkit);
+ const [bytes]=await Promise.all([fontData(),localTool('qrcode.js','qrcode')]),doc=await PDFLib.PDFDocument.create();doc.registerFontkit(window.fontkit);
  const regular=await doc.embedFont(bytes[0],{subset:true}),semibold=await doc.embedFont(bytes[1],{subset:true}),fonts=[regular,semibold];
  const manifest={version:1,id:crypto.randomUUID(),subject,width:PW,height:PH,items:[],questionIds:questions.map(q=>q.id)},label=subject==='technical'?'安全生产技术':'其他安全专业实务';
  const rgb=PDFLib.rgb,ink=rgb(23/255,43/255,67/255),muted=rgb(98/255,113/255,134/255),images=new Map(),supported=new Set(regular.getCharacterSet());
@@ -52,12 +71,13 @@ async function makePdf({questions,subject,solutions=false,onProgress=()=>{}}){
   else{await text('正确答案：'+q.answer.join('、'),{bold:true,size:16,line:26,limit:770});await text(q.explanation||'原卷未提供文字解析。',{size:13,line:22,limit:770});await pictures(q.explanationImages)}
   await flush();onProgress(index+1,questions.length,'生成解析');
  }
- manifest.totalPages=doc.getPageCount();doc.setTitle('李天宇 · '+label+' · '+(solutions?'题目与解析':'手写练习'));doc.setAuthor('个人错题本');doc.setSubject('在固定答题框内作答，其他空白可自由手写。');doc.setKeywords([PREFIX+encode(manifest)]);
+ manifest.totalPages=doc.getPageCount();addRecoveryMarks(doc,manifest,questions);doc.setTitle('李天宇 · '+label+' · '+(solutions?'题目与解析':'手写练习'));doc.setAuthor('个人错题本');doc.setSubject('在固定答题框内作答，其他空白可自由手写。');doc.setKeywords([PREFIX+encode(manifest)]);
  return {bytes:await doc.save(),manifest};
 }
 async function readManifest(bytes){const doc=await PDFLib.PDFDocument.load(bytes,{ignoreEncryption:false});const keywords=doc.getKeywords()||'';if(!keywords.startsWith(PREFIX))return {manifest:null,pages:doc.getPageCount()};let manifest;try{manifest=decode(keywords.slice(PREFIX.length).replace(/\s/g,''))}catch{throw Error('PDF识别信息损坏，请同时选择原始导出的PDF。')}return {manifest,pages:doc.getPageCount()}}
-async function scanPdf(bytes,{originalBytes,bank,onProgress=()=>{}}={}){
+async function scanPdf(bytes,{originalBytes,bank,manifestOverride,onProgress=()=>{}}={}){
  let info=await readManifest(bytes),m=info.manifest;if(!m&&originalBytes)m=(await readManifest(originalBytes)).manifest;
+ if(!m&&manifestOverride)m=manifestOverride;
  if(!m)throw Error('请导入本工具导出的作答PDF。若书写软件移除了识别信息，请同时选择原始PDF。');
  const byId=new Map(bank.questions.map(q=>[q.id,q]));
  if(m.version!==1||m.subject!==bank.subject||m.totalPages!==info.pages||!Array.isArray(m.items)||!m.items.length||m.items.length>265||m.width!==PW||m.height!==PH)throw Error('PDF页数或格式不匹配；仅支持本工具导出的选择题PDF，请勿增删或重排页面。');
@@ -77,5 +97,5 @@ async function scanPdf(bytes,{originalBytes,bank,onProgress=()=>{}}={}){
  }}finally{await pdf.destroy()}
  return {manifest:m,rows};
 }
-window.PdfNotebook={makePdf,readManifest,scanPdf};
+window.PdfNotebook={makePdf,readManifest,recoverManifest,scanPdf};
 })();
