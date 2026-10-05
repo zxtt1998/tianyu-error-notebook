@@ -22,14 +22,15 @@ function capture(subject,env,bank,legacy=false){if(!env)return;const s=env.sessi
  if(legacy&&!get(base+'/initial',null))set(base+'/initial',{counted:!!s.statsRecorded,grades:s.selfGrades||{}});
  if(!get(base+'/initial',null))set(base+'/initial',{counted:false,grades:{}});
  const initial=get(base+'/initial');
- const metadata={...s};delete metadata.answers;delete metadata.selfGrades;
+ const metadata={...s};delete metadata.answers;delete metadata.selfGrades;delete metadata.exclusions;delete metadata.confirmed;
  const previous=get(base+'/meta',null);if(previous?.submitted&&!metadata.submitted)metadata.submitted=true;
- const oldMeta=prior?{...prior}:null;if(oldMeta){delete oldMeta.answers;delete oldMeta.selfGrades}if(!sameRound||!same(oldMeta,metadata))set(base+'/meta',metadata);
+ const oldMeta=prior?{...prior}:null;if(oldMeta){delete oldMeta.answers;delete oldMeta.selfGrades;delete oldMeta.exclusions;delete oldMeta.confirmed}if(!sameRound||!same(oldMeta,metadata))set(base+'/meta',metadata);
  const current=get(subject+'/current',null),other=current?get(subject+'/round/'+current+'/meta',null):null;
  if(!current||current===r||!other||(s.startedAt||'')>=(other.startedAt||''))set(subject+'/current',r);
  for(const id of s.ids){const a=s.answers?.[id]||[],short=isShort(id),parts=short?partCount(id):0;
   if(short){for(let i=0;i<parts;i++)if(!sameRound||a[i]!==prior.answers?.[id]?.[i])set(base+'/answer/'+id+':'+i,typeof a[i]==='string'?a[i]:'');for(let i=0;i<parts;i++){const grade=s.selfGrades?.[id]?.[i]||null;if(!sameRound||grade!==(prior.selfGrades?.[id]?.[i]||null))set(base+'/grade/'+id+':'+i,grade);if(s.submitted&&a[i]?.trim()&&(grade||initial.grades[id]?.[i]||get(subject+'/count/'+id+':'+(i+1)+'/'+r)!==undefined)){const orig=initial.counted&&initial.grades[id]?.[i]==='review'?1:0;set(subject+'/count/'+id+':'+(i+1)+'/'+r,(grade==='review'?1:0)-orig)}}}
   else {if(!sameRound||!same(a,prior.answers?.[id]||[]))set(base+'/answer/'+id,Array.isArray(a)?a:[]);if(s.submitted&&!initial.counted&&a.length&&bank){const q=bank.questions.find(q=>q.id===id);if(q)set(subject+'/count/'+id+'/'+r,[...a].sort().join(',')===[...q.answer].sort().join(',')?0:1)}}
+  if(!short){const excluded=s.exclusions?.[id]||{},previousExclusions=sameRound?(prior.exclusions?.[id]||{}):{};for(const letter of new Set([...Object.keys(excluded),...Object.keys(previousExclusions)])){if(!/^[A-E]$/.test(letter))continue;if(!sameRound||!!excluded[letter]!==!!previousExclusions[letter])set(base+'/exclude/'+id+'/'+letter,!!excluded[letter])}if(s.confirmed?.[id]&&(!sameRound||!prior.confirmed?.[id]))set(base+'/confirmed/'+id,true)}
   const touched=short?a.some(v=>v?.trim()):a.length>0,completed=short?a.length>=parts&&a.slice(0,parts).every(v=>v?.trim()):a.length>0;
   if(touched)set(subject+'/seen/'+id,true);if(completed)set(subject+'/complete/'+id,true);
  }
@@ -38,8 +39,8 @@ function capture(subject,env,bank,legacy=false){if(!env)return;const s=env.sessi
 function counts(subject){const result={};for(const [k,c] of Object.entries(doc.cells)){if(k.startsWith(subject+'/baseline/'))result[k.slice((subject+'/baseline/').length)]=c.value;}
  for(const [k,c] of Object.entries(doc.cells)){if(k.startsWith(subject+'/count/')){const id=k.slice((subject+'/count/').length).split('/')[0];result[id]=(result[id]||0)+(Number(c.value)||0)}}for(const k of Object.keys(result))result[k]=Math.max(0,result[k]);return result}
 function snapshot(subject){const r=get(subject+'/current',null),meta=r?get(subject+'/round/'+r+'/meta',null):null;if(!meta)return {schema:2,session:null,wrongCounts:counts(subject)};
- const s=copy(meta),base=subject+'/round/'+r;s.answers={};s.selfGrades={};
- for(const id of s.ids){if(isShort(id)){s.answers[id]=Array.from({length:partCount(id)},(_,i)=>get(base+'/answer/'+id+':'+i,''));s.selfGrades[id]=Array.from({length:partCount(id)},(_,i)=>get(base+'/grade/'+id+':'+i,null));}else s.answers[id]=get(base+'/answer/'+id,[])}
+ const s=copy(meta),base=subject+'/round/'+r;s.answers={};s.selfGrades={};s.exclusions={};s.confirmed={};
+ for(const id of s.ids){if(isShort(id)){s.answers[id]=Array.from({length:partCount(id)},(_,i)=>get(base+'/answer/'+id+':'+i,''));s.selfGrades[id]=Array.from({length:partCount(id)},(_,i)=>get(base+'/grade/'+id+':'+i,null));}else {s.answers[id]=get(base+'/answer/'+id,[]);s.exclusions[id]={};for(const letter of ['A','B','C','D','E'])if(get(base+'/exclude/'+id+'/'+letter,false))s.exclusions[id][letter]=true;if(get(base+'/confirmed/'+id,false))s.confirmed[id]=true}}
  return {schema:2,session:s,wrongCounts:counts(subject)};
 }
 function writeEnvelopes(){for(const subject of Object.keys(KEYS)){if(!get(subject+'/current'))continue;try{localStorage.setItem(KEYS[subject],JSON.stringify(snapshot(subject)))}catch{status='本机保存失败'}}}
