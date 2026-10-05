@@ -1,4 +1,4 @@
-const CACHE='tianyu-shell-r6-20261004';
+const CACHE='tianyu-shell-r7-20261005';
 const ROOT=new URL('./',self.location.href);
 const normalized=request=>{const u=new URL(typeof request==='string'?request:request.url);u.search='';if(u.pathname.endsWith('/index.html'))u.pathname=u.pathname.slice(0,-10);return u.href};
 self.addEventListener('install',event=>event.waitUntil((async()=>{
