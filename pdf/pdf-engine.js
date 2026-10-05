@@ -1,24 +1,38 @@
 (function(){
 'use strict';
 const PW=595.28,PH=841.89,SCALE=2,PREFIX='TYNOTEBOOK-PDF-v1|';
-const fonts='"PingFang SC","Microsoft YaHei",Arial,sans-serif';
 const pause=()=>new Promise(r=>setTimeout(r,0));
 function encode(value){const bytes=new TextEncoder().encode(JSON.stringify(value));let s='';for(const b of bytes)s+=String.fromCharCode(b);return btoa(s)}
 function pageCode(id,page){let h=2166136261;for(const c of id+':'+page){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return (h>>>0).toString(2).padStart(32,'0')}
 function decode(value){return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(value),c=>c.charCodeAt(0))))}
-async function image(src){const i=new Image();i.src=src;await i.decode();return i}
+// The document uses vector text and lines. Raster assets retain their original pixels.
+let fontPromise;
+async function fontData(){
+ if(!fontPromise)fontPromise=(async()=>{
+  if(!window.fontkit)await new Promise((resolve,reject)=>{const s=document.createElement('script');s.src='vendor/fontkit.umd.min.js';s.onload=resolve;s.onerror=()=>{s.remove();reject(Error('字体工具加载失败，请联网重试或更新完整离线下载。'))};document.head.append(s)});
+  return Promise.all(['NotebookSans-Regular.ttf','NotebookSans-Semibold.ttf'].map(async name=>{const r=await fetch('vendor/'+name);if(!r.ok)throw Error('中文字体加载失败，请联网重试或更新完整离线下载。');return new Uint8Array(await r.arrayBuffer())}));
+ })().catch(e=>{fontPromise=null;throw e});
+ return fontPromise;
+}
 async function makePdf({questions,subject,solutions=false,onProgress=()=>{}}){
- const doc=await PDFLib.PDFDocument.create(),manifest={version:1,id:crypto.randomUUID(),subject,width:PW,height:PH,items:[],questionIds:questions.map(q=>q.id)},label=subject==='technical'?'安全生产技术':'其他安全专业实务';
- let canvas,ctx,y,current='',pageNumber=0;
- function begin(title){canvas=document.createElement('canvas');canvas.width=Math.ceil(PW*SCALE);canvas.height=Math.ceil(PH*SCALE);ctx=canvas.getContext('2d');ctx.scale(SCALE,SCALE);ctx.fillStyle='#fff';ctx.fillRect(0,0,PW,PH);ctx.fillStyle='#172b43';ctx.font='600 11px '+fonts;ctx.fillText('李天宇 · '+label+' · 手写练习',40,33);ctx.font='10px '+fonts;ctx.fillText(title,40,52);ctx.strokeStyle='#d3dbe5';ctx.lineWidth=.5;ctx.beginPath();ctx.moveTo(40,61);ctx.lineTo(PW-40,61);ctx.stroke();y=82;current=title}
- async function flush(){if(!canvas)return;const item=manifest.items.find(i=>i.page===doc.getPageCount());if(item){item.code=pageCode(manifest.id,item.page);for(let i=0;i<32;i++){ctx.fillStyle=item.code[i]==='1'?'#000':'#fff';ctx.fillRect(482+i*2,43,2,5)}}ctx.fillStyle='#627186';ctx.font='9px '+fonts;ctx.fillText('练习编号 '+manifest.id.slice(0,8)+' · 第 '+(++pageNumber)+' 页',40,818);const jpg=await doc.embedJpg(canvas.toDataURL('image/jpeg',.94));doc.addPage([PW,PH]).drawImage(jpg,{x:0,y:0,width:PW,height:PH});canvas.width=1;canvas.height=1;canvas=null;await pause()}
+ onProgress(0,questions.length,'准备清晰文字');
+ const bytes=await fontData(),doc=await PDFLib.PDFDocument.create();doc.registerFontkit(window.fontkit);
+ const regular=await doc.embedFont(bytes[0],{subset:true}),semibold=await doc.embedFont(bytes[1],{subset:true}),fonts=[regular,semibold];
+ const manifest={version:1,id:crypto.randomUUID(),subject,width:PW,height:PH,items:[],questionIds:questions.map(q=>q.id)},label=subject==='technical'?'安全生产技术':'其他安全专业实务';
+ const rgb=PDFLib.rgb,ink=rgb(23/255,43/255,67/255),muted=rgb(98/255,113/255,134/255),images=new Map(),supported=new Set(regular.getCharacterSet());
+ let page=null,y,current='',pageNumber=0;
+ function clean(value){const text=String(value??'').replace(/\\n/g,'\n').replace(/[\u200b-\u200d\ufeff]/g,'').replace(/\t/g,'  ').replace(/\r/g,'');for(const char of text)if(char!=='\n'&&!supported.has(char.codePointAt(0)))throw Error('字库缺少字符“'+char+'”，请更新离线题库后重试。');return text}
+ function draw(value,x,top,size=14,bold=false,color=ink){if(value)page.drawText(clean(value),{x,y:PH-top,size,font:fonts[Number(bold)],color})}
+ function line(x1,top1,x2,top2,color,width=.5){page.drawLine({start:{x:x1,y:PH-top1},end:{x:x2,y:PH-top2},color,thickness:width})}
+ function begin(title){page=doc.addPage([PW,PH]);draw('李天宇 · '+label+' · 手写练习',40,33,11,true);draw(title,40,52,10);line(40,61,PW-40,61,rgb(211/255,219/255,229/255));y=82;current=title}
+ async function flush(){if(!page)return;const item=manifest.items.find(i=>i.page===doc.getPageCount()-1);if(item){item.code=pageCode(manifest.id,item.page);for(let i=0;i<32;i++)if(item.code[i]==='1')page.drawRectangle({x:482+i*2,y:PH-48,width:2,height:5,color:rgb(0,0,0)})}draw('练习编号 '+manifest.id.slice(0,8)+' · 第 '+(++pageNumber)+' 页',40,818,9,false,muted);page=null;await pause()}
  async function room(height,limit=600){if(y+height>limit){await flush();begin(current+'（续页）')}}
- async function text(value,{size=14,line=22,bold=false,indent=0,limit=600}={}){const source=String(value??'').replace(/\\n/g,'\n').replace(/[\u200b-\u200d\ufeff]/g,'');ctx.font=(bold?'600 ':'')+size+'px '+fonts;const max=PW-80-indent;for(const paragraph of source.split('\n')){let row='';const rows=[];for(const char of paragraph){if(row&&ctx.measureText(row+char).width>max){rows.push(row);row=char}else row+=char}rows.push(row);for(const row of rows){await room(line,limit);ctx.font=(bold?'600 ':'')+size+'px '+fonts;ctx.fillStyle='#172b43';ctx.fillText(row,40+indent,y);y+=line}}}
- async function pictures(images=[]){for(const im of images){const i=await image(im.src);let w=Math.min(420,i.width),h=w*i.height/i.width;if(h>210){h=210;w=h*i.width/i.height}await room(h+20);ctx.drawImage(i,40,y-8,w,h);y+=h+16}}
- function writing(top=699,label='我的笔记'){ctx.fillStyle='#637287';ctx.font='11px '+fonts;ctx.fillText(label,40,top);ctx.strokeStyle='#dce3eb';ctx.lineWidth=.5;for(let yy=top+24;yy<800;yy+=24){ctx.beginPath();ctx.moveTo(40,yy);ctx.lineTo(PW-40,yy);ctx.stroke()}}
+ async function text(value,{size=14,line:leading=22,bold=false,indent=0,limit=600}={}){const source=clean(value),font=fonts[Number(bold)],max=PW-80-indent;for(const paragraph of source.split('\n')){let row='',width=0;const rows=[];for(const char of paragraph){const w=font.widthOfTextAtSize(char,size);if(row&&width+w>max){rows.push(row);row=char;width=w}else{row+=char;width+=w}}rows.push(row);for(const row of rows){await room(leading,limit);draw(row,40+indent,y,size,bold);y+=leading}}}
+ async function asset(src){if(!images.has(src)){const r=await fetch(src);if(!r.ok)throw Error('题目配图加载失败，请联网重试或更新离线下载。');const b=new Uint8Array(await r.arrayBuffer());images.set(src,b[0]===137&&b[1]===80?await doc.embedPng(b):await doc.embedJpg(b))}return images.get(src)}
+ async function pictures(list=[]){for(const im of list){const image=await asset(im.src);let w=Math.min(420,image.width),h=w*image.height/image.width;if(h>210){h=210;w=h*image.width/image.height}await room(h+20);page.drawImage(image,{x:40,y:PH-(y-8)-h,width:w,height:h});y+=h+16}}
+ function writing(top=699,label='我的笔记'){draw(label,40,top,11,false,muted);for(let yy=top+24;yy<800;yy+=24)line(40,yy,PW-40,yy,rgb(220/255,227/255,235/255))}
  for(let index=0;index<questions.length;index++){
-  const q=questions[index],title=`第${q.paper}套 · 原题${q.number} · ${q.type==='short'?'案例简答':q.type==='single'?'单选':'多选'}`;
-  begin(title);
+  const q=questions[index],title=`第${q.paper}套 · 原题${q.number} · ${q.type==='short'?'案例简答':q.type==='single'?'单选':'多选'}`;begin(title);
   if(q.type==='short'){
    await text(q.material,{size:13,line:21,limit:780});await pictures(q.images);await flush();
    for(const part of q.parts){begin(title+' · 第'+part.number+'小问');await text(part.prompt,{bold:true,size:15,line:24,limit:450});writing(Math.max(180,y+25),'我的作答');await flush()}
@@ -26,9 +40,9 @@ async function makePdf({questions,subject,solutions=false,onProgress=()=>{}}){
    await text(q.stem,{size:14,line:23});y+=7;await pictures(q.images);
    for(const [letter,value] of Object.entries(q.options)){await text(letter+'. '+value,{size:13,line:22,indent:10});await pictures(q.optionImages?.[letter]);y+=7}
    if(y>600){await flush();begin(title+'（作答页）')}
-   ctx.font='11px '+fonts;ctx.fillStyle='#53667d';ctx.fillText('作答区：用深色笔在框内打勾或涂黑，改答案请擦除原标记。',40,625);
-   const boxes={};Object.keys(q.options).forEach((letter,i)=>{const x=88+i*91,top=647,size=27;ctx.fillStyle='#172b43';ctx.font='15px '+fonts;ctx.fillText(letter,x-22,top+20);ctx.strokeStyle='#94a3b8';ctx.lineWidth=.8;ctx.strokeRect(x,top,size,size);boxes[letter]=[x,top,size]});
-   manifest.items.push({id:q.id,page:doc.getPageCount(),boxes});writing();await flush();
+   draw('作答区：用深色笔在框内打勾或涂黑，改答案请擦除原标记。',40,625,11,false,muted);
+   const boxes={};Object.keys(q.options).forEach((letter,i)=>{const x=88+i*91,top=647,size=27;draw(letter,x-22,top+20,15);page.drawRectangle({x,y:PH-top-size,width:size,height:size,borderColor:rgb(148/255,163/255,184/255),borderWidth:.8});boxes[letter]=[x,top,size]});
+   manifest.items.push({id:q.id,page:doc.getPageCount()-1,boxes});writing();await flush();
   }
   onProgress(index+1,questions.length,'生成题目');
  }
