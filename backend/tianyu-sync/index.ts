@@ -2,7 +2,7 @@ const allowedOrigins=new Set(['https://zxtt1998.github.io','http://127.0.0.1:876
 const reply=(body:unknown,status:number,headers:Record<string,string>)=>new Response(JSON.stringify(body),{status,headers:{...headers,'Content-Type':'application/json','Cache-Control':'no-store'}});
 Deno.serve(async(req:Request)=>{
  const origin=req.headers.get('Origin')||'';
- const cors={'Access-Control-Allow-Origin':allowedOrigins.has(origin)?origin:'https://zxtt1998.github.io','Vary':'Origin','Access-Control-Allow-Headers':'content-type,x-notebook-key','Access-Control-Allow-Methods':'GET,PUT,OPTIONS'};
+ const cors={'Access-Control-Allow-Origin':allowedOrigins.has(origin)?origin:'https://zxtt1998.github.io','Vary':'Origin','Access-Control-Allow-Headers':'content-type,x-notebook-key','Access-Control-Allow-Methods':'GET,PUT,OPTIONS','Access-Control-Max-Age':'600'};
  if(origin&&!allowedOrigins.has(origin))return reply({error:'origin_not_allowed'},403,cors);
  if(req.method==='OPTIONS')return new Response(null,{status:204,headers:cors});
  if(!['GET','PUT'].includes(req.method))return reply({error:'method_not_allowed'},405,cors);
@@ -18,6 +18,15 @@ Deno.serve(async(req:Request)=>{
  if(!secret.startsWith('sb_secret_'))headers.Authorization='Bearer '+secret;
  try{
   if(req.method==='GET'){
+   const since=new URL(req.url).searchParams.get('since');
+   if(since!==null){
+    if(!/^\d{1,16}$/.test(since)||!Number.isSafeInteger(Number(since)))return reply({error:'invalid_revision'},400,cors);
+    // Authenticate the requested vault and read only its small revision field first.
+    const check=await fetch(api+'&select=revision',{headers});
+    if(!check.ok)return reply({error:'storage_unavailable'},503,cors);
+    const versions=await check.json();if(versions.length!==1)return reply({error:'not_authorized'},401,cors);
+    if(versions[0].revision===Number(since))return reply({revision:versions[0].revision,unchanged:true},200,cors);
+   }
    const r=await fetch(api+'&select=revision,encrypted,updated_at',{headers});
    if(!r.ok)return reply({error:'storage_unavailable'},503,cors);
    const rows=await r.json();if(rows.length!==1)return reply({error:'not_authorized'},401,cors);
