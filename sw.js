@@ -1,9 +1,9 @@
-const CACHE='tianyu-shell-r19-20261007';
+const CACHE='tianyu-shell-r21-20261007';
 const ROOT=new URL('./',self.location.href);
 const normalized=request=>{const u=new URL(typeof request==='string'?request:request.url);u.search='';if(u.pathname.endsWith('/index.html'))u.pathname=u.pathname.slice(0,-10);return u.href};
 self.addEventListener('install',event=>event.waitUntil((async()=>{
  const cache=await caches.open(CACHE);
- await Promise.all(['./','technical/','practical/','memory/'].map(async p=>{try{const url=new URL(p,ROOT).href,r=await fetch(url,{cache:'reload'});if(r.ok)await cache.put(normalized(url),r)}catch{}}));
+ await Promise.all(['./','technical/','consolidation/','practical/','memory/'].map(async p=>{try{const url=new URL(p,ROOT).href,r=await fetch(url,{cache:'reload'});if(r.ok)await cache.put(normalized(url),r)}catch{}}));
  await self.skipWaiting();
 })()));
 self.addEventListener('activate',event=>event.waitUntil((async()=>{for(const k of await caches.keys())if(k.startsWith('tianyu-shell-')&&k!==CACHE)await caches.delete(k);await self.clients.claim()})()));
