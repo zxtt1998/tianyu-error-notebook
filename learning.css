@@ -7,3 +7,5 @@
 .learning-actions #practice-mistakes{background:#2458a6;color:#fff;border-color:#2458a6}.learning-actions #practice-mistakes:disabled{background:#eef1f5;color:#738195;border-color:#d8e0eb}@media(max-width:540px){.learning-actions #practice-mistakes{flex-basis:100%}}
 
 .recite-entry{display:grid;gap:6px;border:1px solid #c6dcd3;background:#edf6f2;color:#15644b;text-decoration:none;padding:20px;border-radius:14px;margin-bottom:26px}.recite-entry strong{font-size:20px}.recite-entry span{font-size:15px}.recite-entry small{font-size:13px;color:#53667d}
+
+.answer-tools{margin-top:24px;border-top:1px solid #d8e0eb;padding-top:18px}.answer-count-total{font-size:16px!important;margin:0 0 8px!important;color:#172b43!important}.answer-count-total strong{font-size:22px;color:#a04d17}.answer-count>.small{font-size:13px;margin:0 0 12px}.answer-tools .my-note{margin-top:16px}.answer-tools textarea{box-sizing:border-box;display:block;background:#fff;color:#172b43}.answer-tools .my-note label{color:#172b43}
